@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+
+'''
+The IQ Agent.
+'''
+
+from argparse import ArgumentParser
+from argparse import Namespace
+from threading import Thread
+
+import asyncio
+import logging
+import os
+
+from iq.agent.configuration import Configuration
+from iq.agent.configuration import TomlConfiguration
+from iq.agent.security import SecurityProvider
+from iq.agent.services.executors import ShellExecutor
+from iq.agent.services.monitors import JournaldMonitor
+from iq.agent.services.monitors import VitalsMonitor
+
+
+# Define the global variables.
+RUNNING: bool = True
+
+
+def initialize_logging(configuration: 'Configuration') -> None:
+    '''
+    Initialize the logging system.
+    '''
+
+    # Define the logging encoding.
+    logging_encoding: str = 'utf-8'
+    if configuration.has('agent.logging.encoding'):
+        logging_encoding = configuration.get_str('agent.logging.encoding')
+
+    # Define the logging level.
+    logging_level: int = logging.INFO
+    if configuration.has('agent.logging.level'):
+        logging_level = parse_logging_level(
+            logging_level=configuration.get_str('agent.logging.level'))
+
+    # Define the logging path.
+    logging_path: str = None
+    if configuration.has('agent.logging.path'):
+        logging_path = configuration.get_str('agent.logging.path')
+
+    # Make sure the logging directory exists.
+    if logging_path:
+        logging_directory: str = os.path.dirname(logging_path)
+        os.makedirs(logging_directory, exist_ok=True)
+
+    # Define the logging format.
+    logging_format: str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    if configuration.has('agent.logging.format'):
+        logging_format = configuration.get_str('agent.logging.format')
+
+    # Configure logging.
+    logging.basicConfig(encoding=logging_encoding,
+                        filename=logging_path,
+                        format=logging_format,
+                        level=logging_level)
+
+
+def initialize_security_provider(configuration: 'Configuration') -> 'SecurityProvider':
+    '''
+    Creates a new security provider.
+    '''
+
+    # Get the access token.
+    access_token: str = configuration.get_str('agent.access_token')
+
+    # Check if the access token is set.
+    if not access_token:
+        raise ValueError('The access token is required.')
+
+    # Get the client ID.
+    client_id: str = configuration.get_str('agent.client_id')
+
+    # Check if the client ID is set.
+    if not client_id:
+        raise ValueError('The client ID is required.')
+
+    # Get the client secret.
+    client_secret: str = configuration.get_str('agent.client_secret')
+
+    # Check if the client secret is set.
+    if not client_secret:
+        raise ValueError('The client secret is required.')
+
+    # Create the security provider.
+    return SecurityProvider(access_token, client_id, client_secret)
+
+
+def parse_logging_level(logging_level: str = 'INFO') -> int:
+    '''
+    Parse the logging level.
+    '''
+
+    logging_level = logging_level.upper()
+    match logging_level:
+        case 'DEBUG':
+            return logging.DEBUG
+        case 'INFO':
+            return logging.INFO
+        case 'WARNING':
+            return logging.WARNING
+        case 'ERROR':
+            return logging.ERROR
+        case 'CRITICAL':
+            return logging.CRITICAL
+        case _:
+            raise ValueError(f'Invalid logging level: "{logging_level}"')
+
+
+async def run_journald_monitor(configuration: 'Configuration',
+                               security: 'SecurityProvider'):
+    '''
+    The main loop.
+    '''
+
+    logging.info('Starting the Journald monitor...')
+
+    # Get the monitor interval.
+    interval: int = configuration.get_int(
+        'agent.monitors.journald.interval') or 60
+
+    logging.info('Journald Monitor Interval: %s', interval)
+
+    # Get the number of retries.
+    retries: int = configuration.get_int(
+        'agent.monitors.journald.retries') or 3
+
+    logging.info('Journald Monitor Retries: %s', retries)
+
+    # Get the monitor request timeout.
+    timeout: int = configuration.get_int(
+        'agent.monitors.journald.timeout') or 300
+
+    logging.info('Journald Monitor Timeout: %s', timeout)
+
+    # Get the service URL.
+    url: str = configuration.get_str(
+        'agent.monitors.journald.url')
+
+    if not url:
+        raise ValueError('The Journald service URL is required.')
+
+    logging.info('Journald Monitor URL: %s', url)
+
+    # Create the journald monitor.
+    monitor: 'JournaldMonitor' = JournaldMonitor(
+        url, security, retries=retries, timeout=timeout
+    )
+
+    logging.info('Journald monitor is created.')
+
+    # Run the journal monitor forever.
+    while RUNNING:
+        try:
+            await monitor.run()
+        except Exception as exception:
+            logging.error(exception)
+
+        # Wait for the interval.
+        await asyncio.sleep(interval)
+
+
+async def run_shell_executor(configuration: 'Configuration',
+                             security: 'SecurityProvider'):
+    '''
+    The main loop.
+    '''
+
+    logging.info('Starting the Shell executor...')
+
+    # Get the executor interval.
+    interval: int = configuration.get_int(
+        'agent.executors.shell.interval') or 60
+
+    logging.info('Shell Executor Interval: %s', interval)
+
+    # Get the executor polling timeout.
+    poll_timeout: int = configuration.get_int(
+        'agent.executors.shell.poll_timeout') or 300
+
+    logging.info('Shell Executor Poll Timeout: %s', poll_timeout)
+
+    # Get the executor reply timeout.
+    reply_timeout: int = configuration.get_int(
+        'agent.executors.shell.reply_timeout') or 300
+
+    logging.info('Shell Executor Reply Timeout: %s', reply_timeout)
+
+    # Get the executor reply retries.
+    reply_retries: int = configuration.get_int(
+        'agent.executors.shell.reply_retries') or 3
+
+    logging.info('Shell Executor Reply Retries: %s', reply_retries)
+
+    # Get the executor service URL.
+    url: str = configuration.get_str(
+        'agent.executors.shell.url')
+
+    if not url:
+        raise ValueError('The Shell Executor service URL is required.')
+
+    logging.info('Shell Executor URL: %s', url)
+
+    # Create the server command executor.
+    executor: 'ShellExecutor' = ShellExecutor(
+        url, security, poll_timeout=poll_timeout, reply_retries=reply_retries,
+        reply_timeout=reply_timeout
+    )
+
+    logging.info('Shell executor is created.')
+
+    # Run the server command executor forever.
+    while RUNNING:
+        try:
+            await executor.run()
+        except Exception as exception:
+            logging.error(exception)
+
+        # Wait for the interval.
+        await asyncio.sleep(interval)
+
+
+async def run_vitals_monitor(configuration: 'Configuration',
+                             security: 'SecurityProvider'):
+    '''
+    The main loop.
+    '''
+
+    logging.info('Starting the Vitals monitor...')
+
+    # Get the monitor interval.
+    interval: int = configuration.get_int(
+        'agent.monitors.vitals.interval') or 60
+
+    logging.info('Vitals Monitor Interval: %s', interval)
+
+    # Get the monitor request timeout.
+    timeout: int = configuration.get_int(
+        'agent.monitors.vitals.timeout') or 300
+
+    logging.info('Vitals Monitor Timeout: %s', timeout)
+
+    # Get the service URL.
+    url: str = configuration.get_str(
+        'agent.monitors.vitals.url')
+
+    if not url:
+        raise ValueError('The Vitals service URL is required.')
+
+    logging.info('Vitals Monitor URL: %s', url)
+
+    # Create the vitals monitor.
+    monitor: 'VitalsMonitor' = VitalsMonitor(
+        url, security, timeout=timeout
+    )
+
+    logging.info('Vitals monitor is created.')
+
+    # Run the vitals monitor forever.
+    while RUNNING:
+        try:
+            await monitor.run()
+        except Exception as exception:
+            logging.error(exception)
+
+        # Wait for the interval.
+        await asyncio.sleep(interval)
+
+
+def main(args: Namespace):
+    '''
+    The main function.
+    '''
+
+    # Load the configuration file.
+    configuration: 'Configuration' = TomlConfiguration()
+    configuration.load(args.config)
+
+    # Initialize logging.
+    initialize_logging(configuration)
+
+    logging.info('Starting the IQ Agent...')
+    logging.info('Configuration is loaded.')
+
+    # Initialize the security provider.
+    security: 'SecurityProvider' = initialize_security_provider(configuration)
+
+    logging.info('Security provider is initialized.')
+
+    # Start the Vitals monitor task.
+    if configuration.get_bool('agent.monitors.vitals.enabled'):
+        vitals_monitor_thread = Thread(
+            target=asyncio.run,
+            args=(run_vitals_monitor(configuration, security),))
+
+        vitals_monitor_thread.start()
+
+        logging.info('Vitals monitor task is started.')
+
+    # Start the Journald monitor task.
+    if configuration.get_bool('agent.monitors.journald.enabled'):
+        journald_monitor_thread = Thread(
+            target=asyncio.run,
+            args=(run_journald_monitor(configuration, security),))
+
+        journald_monitor_thread.start()
+
+        logging.info('Journald monitor task is started.')
+
+    # Start the Shell executor task.
+    if configuration.get_bool('agent.executors.shell.enabled'):
+        shell_executor_thread = Thread(
+            target=asyncio.run,
+            args=(run_shell_executor(configuration, security),))
+        shell_executor_thread.start()
+
+        logging.info('Shell executor task is started.')
+
+    # Wait for the tasks to exit.
+    if configuration.get_bool('agent.monitors.vitals.enabled'):
+        vitals_monitor_thread.join()
+
+    if configuration.get_bool('agent.monitors.journald.enabled'):
+        journald_monitor_thread.join()
+
+    if configuration.get_bool('agent.executors.shell.enabled'):
+        shell_executor_thread.join()
+
+
+if __name__ == '__main__':
+    PARSER: ArgumentParser = ArgumentParser(description='Run the IQ Agent.')
+    PARSER.add_argument('--config', type=str, required=True,
+                        help='The path to the configuration file.')
+    ARGS = PARSER.parse_args()
+
+    # Run the main function.
+    try:
+        main(ARGS)
+    except KeyboardInterrupt:
+        print('Exiting...')
+
+        # Set the running flag to false.
+        RUNNING = False

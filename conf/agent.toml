@@ -1,0 +1,76 @@
+[agent]
+
+# The agent access token.
+access_token = "YOUR ACCESS TOKEN"
+
+# The agent client ID.
+client_id = "YOUR CLIENT ID"
+
+# The agent client secret.
+client_secret = "YOUR CLIENT SECRET"
+
+[agent.logging]
+
+# The encoding for the log file.
+encoding = "utf-8"
+
+# The log level for the log file.
+level = "INFO"
+
+# The log format for the log file.
+format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# The log file path.
+file = "/var/log/iq/agent.log"
+
+[agent.executors.shell]
+
+# The shell executor is enabled by default.
+enabled = true
+
+# The interval in seconds to poll for commands waiting to be executed.
+interval = 60
+
+# The timeout in seconds to poll for commands waiting to be executed.
+poll_timeout = 300
+
+# The timeout in seconds to send the command results to the AdminIQ service.
+reply_timeout = 300
+
+# The maximum number of retries to send the command results to the AdminIQ service.
+reply_retries = 3
+
+# The URL to poll for commands waiting to be executed and send the
+# command results to the AdminIQ service.
+url = "https://api.adminiq.ai/v1/serverhub"
+
+[agent.monitors.journald]
+
+# The journald monitor is enabled by default.
+enabled = true
+
+# The interval in seconds to send journald data to the AdminIQ service.
+interval = 60
+
+# The timeout in seconds to send journald data to the AdminIQ service.
+timeout = 300
+
+# The maximum number of retries to send journald data to the AdminIQ service.
+retries = 3
+
+# The URL to send journald data to the AdminIQ service.
+url = "https://api.adminiq.ai/v1/serverhub"
+
+[agent.monitors.vitals]
+
+# The vitals monitor is enabled by default.
+enabled = false
+
+# The interval in seconds to send vitals data to the AdminIQ service.
+interval = 60
+
+# The timeout in seconds to send vitals data to the AdminIQ service.
+timeout = 300
+
+# The URL to send vitals data to the AdminIQ service.
+url = "https://api.adminiq.ai/v1/serverhub"

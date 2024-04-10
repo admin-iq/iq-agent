@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+
+'''
+The IQ Agent.
+'''
+
+from argparse import ArgumentParser
+from argparse import Namespace
+
+import getpass
+import os
+import toml
+
+def set_value(values: 'dict[str, any]', key: str, value: any) -> None:
+    '''
+    Set the value.
+    '''
+
+    # Define the current dictionary.
+    dictionary: 'dict[str, any]' = values
+
+    # Split the key.
+    keys: list[str] = key.split('.')
+
+    # Iterate over the key parts.
+    for _key in keys[:-1]:
+        if _key not in dictionary:
+            dictionary[_key] = {}
+        dictionary = dictionary[_key]
+
+    # Set the value.
+    dictionary[keys[-1]] = value
+
+def main(args: Namespace) -> None:
+    '''
+    The main function.
+    '''
+
+    # Get the access token.
+    access_token: str = getpass.getpass('Enter the access token: ')
+
+    # Get the client ID.
+    client_id: str = getpass.getpass('\nEnter the client ID: ')
+
+    # Get the client secret.
+    client_secret: str = getpass.getpass('\nEnter the client secret: ')
+
+    # Get the Journald monitor service URL.
+    journald_monitor_url: str = input('\nEnter the Journald monitor service URL: ')
+
+    # Get the Vitals monitor service URL.
+    vitals_monitor_url: str = input('\nEnter the Vitals monitor service URL: ')
+
+    # Get the Shell executor service URL.
+    shell_executor_url: str = input('\nEnter the Shell executor service URL: ')
+
+    # Create the configuration dictionary.
+    configuration: 'dict[str, any]' = {}
+
+    # Set the security values.
+    set_value(configuration, 'agent.access_token', access_token)
+    set_value(configuration, 'agent.client_id', client_id)
+    set_value(configuration, 'agent.client_secret', client_secret)
+
+    # The log configuration.
+    set_value(configuration, 'agent.logging.encoding', 'utf-8')
+    set_value(configuration, 'agent.logging.level', 'INFO')
+    set_value(configuration,
+              'agent.logging.format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    set_value(configuration, 'agent.logging.file', '/var/log/iq/agent.log')
+
+    # Set the journald monitor values.
+    set_value(configuration, 'agent.monitors.journald.url', journald_monitor_url)
+    set_value(configuration, 'agent.monitors.journald.enabled', True)
+    set_value(configuration, 'agent.monitors.journald.interval', 60)
+    set_value(configuration, 'agent.monitors.journald.retries', 3)
+    set_value(configuration, 'agent.monitors.journald.timeout', 300)
+
+    # Set the vitals monitor values.
+    set_value(configuration, 'agent.monitors.vitals.url', vitals_monitor_url)
+    set_value(configuration, 'agent.monitors.vitals.enabled', True)
+    set_value(configuration, 'agent.monitors.vitals.interval', 60)
+    set_value(configuration, 'agent.monitors.vitals.timeout', 300)
+
+    # Set the shell executor values.
+    set_value(configuration, 'agent.executors.shell.url', shell_executor_url)
+    set_value(configuration, 'agent.executors.shell.enabled', True)
+    set_value(configuration, 'agent.executors.shell.interval', 1)
+    set_value(configuration, 'agent.executors.shell.poll_timeout', 300)
+    set_value(configuration, 'agent.executors.shell.reply_timeout', 300)
+    set_value(configuration, 'agent.executors.shell.reply_retries', 3)
+
+    # Make sure the config directory exists.
+    os.makedirs(os.path.dirname(args.config), exist_ok=True)
+
+    # Write the configuration to the file.
+    with open(args.config, 'w', encoding='utf-8') as file:
+        toml.dump(configuration, file)
+
+    # Print the success message.
+    print('Success! The IQ Agent has been saved.')
+
+if __name__ == '__main__':
+    PARSER: ArgumentParser = ArgumentParser(description='Configure the IQ Agent.')
+    PARSER.add_argument('--config', type=str, required=True,
+                        help='The path to the configuration file.')
+    ARGS = PARSER.parse_args()
+
+    # Run the main function.
+    try:
+        main(ARGS)
+    except KeyboardInterrupt:
+        print('Exiting...')
