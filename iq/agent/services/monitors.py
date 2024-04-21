@@ -14,7 +14,8 @@ import socket
 import subprocess
 
 from platform import uname_result
-from systemd import journal
+if platform.system() != 'Windows':
+    from systemd import journal
 from tenacity import AsyncRetrying
 from tenacity import RetryError
 from tenacity import stop_after_attempt

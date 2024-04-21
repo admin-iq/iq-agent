@@ -11,12 +11,16 @@ from threading import Thread
 import asyncio
 import logging
 import os
+import platform
 
 from iq.agent.configuration import Configuration
 from iq.agent.configuration import TomlConfiguration
 from iq.agent.security import SecurityProvider
+if platform.system() == 'Windows':
+    from iq.agent.services.event_monitor import EventLogMonitor
 from iq.agent.services.executors import ShellExecutor
-from iq.agent.services.monitors import JournaldMonitor
+if platform.system() != 'Windows':
+    from iq.agent.services.monitors import JournaldMonitor
 from iq.agent.services.monitors import VitalsMonitor
 
 
@@ -272,6 +276,46 @@ async def run_vitals_monitor(configuration: 'Configuration',
         # Wait for the interval.
         await asyncio.sleep(interval)
 
+async def run_event_system_monitor(configuration: 'Configuration',
+                                   security: 'SecurityProvider'):
+
+    logging.info('Creating the Event System monitor...')
+
+    # Get the monitor interval.
+    interval: int = configuration.get_int(
+        'agent.monitors.event.interval') or 60
+
+    logging.info('Event System Monitor Interval: %s', interval)
+
+    # Get the number of retries.
+    retries: int = configuration.get_int(
+        'agent.monitors.event.retries') or 3
+
+    logging.info('Event System Monitor Retries: %s', retries)
+
+    # Get the monitor request timeout.
+    timeout: int = configuration.get_int(
+        'agent.monitors.event.timeout') or 300
+
+    logging.info('Event System Monitor Timeout: %s', timeout)
+
+    # Get the service URL.
+    url: str = configuration.get_str(
+        'agent.monitors.event.url')
+
+    if not url:
+        raise ValueError('The Event System service URL is required.')
+
+    logging.info('Event System Monitor URL: %s', url)
+
+    # Create the event monitor.
+    monitor: 'EventLogMonitor' = EventLogMonitor(
+        url, security, retries=retries, timeout=timeout
+    )
+
+    logging.info('Event System monitor is created.')
+	
+    await monitor.subscribe()
 
 def main(args: Namespace):
     '''
@@ -304,7 +348,7 @@ def main(args: Namespace):
         logging.info('Vitals monitor task is started.')
 
     # Start the Journald monitor task.
-    if configuration.get_bool('agent.monitors.journald.enabled'):
+    if configuration.get_bool('agent.monitors.journald.enabled') and platform.system() != 'Windows':
         journald_monitor_thread = Thread(
             target=asyncio.run,
             args=(run_journald_monitor(configuration, security),))
@@ -322,15 +366,28 @@ def main(args: Namespace):
 
         logging.info('Shell executor task is started.')
 
+    # Start the Event System monitor task.
+    if configuration.get_bool('agent.monitors.event.enabled') and platform.system() == 'Windows':
+        event_system_monitor_thread = Thread(
+            target=asyncio.run,
+            args=(run_event_system_monitor(configuration, security),))
+
+        event_system_monitor_thread.start()
+
+        logging.info('Event System monitor task is started.')
+
     # Wait for the tasks to exit.
     if configuration.get_bool('agent.monitors.vitals.enabled'):
         vitals_monitor_thread.join()
 
-    if configuration.get_bool('agent.monitors.journald.enabled'):
+    if configuration.get_bool('agent.monitors.journald.enabled') and platform.system() != 'Windows':
         journald_monitor_thread.join()
 
     if configuration.get_bool('agent.executors.shell.enabled'):
         shell_executor_thread.join()
+
+    if configuration.get_bool('agent.monitors.event.enabled') and platform.system() == 'Windows':
+        event_system_monitor_thread.join()
 
 
 if __name__ == '__main__':
