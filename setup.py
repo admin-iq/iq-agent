@@ -21,6 +21,7 @@ setup_args = {
         'py-cpuinfo==9.0.0',
         'pydantic==2.4.2',
         'pyOpenSSL==24.0.0',
+        'requests==2.31.0',
         'tenacity==8.2.3',
         'toml==0.10.2'
     ],

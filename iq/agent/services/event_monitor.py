@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import platform
+import requests
 import select
 import socket
 import subprocess
@@ -19,7 +20,7 @@ from platform import uname_result
 if platform.system() == 'Windows':
     import win32evtlog
     
-from tenacity import AsyncRetrying
+from tenacity import Retrying
 from tenacity import RetryError
 from tenacity import stop_after_attempt
 
@@ -107,11 +108,9 @@ class EventLogMonitor:
             # Wait for the interval.
             await asyncio.sleep(1)
 
-    async def send_event(self, entry: 'LogEvent') -> None:
+    def send_event(self, entry: 'LogEvent') -> None:
         # Serialize the entry.
-        payload: bytes = self.to_log_event(entry) \
-                             .model_dump_json() \
-                             .encode('utf-8')
+        payload: bytes = entry.model_dump_json().encode('utf-8')
 
         # Sign the result.
         signature: str = self._security.sign(payload)
@@ -123,20 +122,17 @@ class EventLogMonitor:
 
         # Send the entry to the service.
         try:
-            async for attempt in AsyncRetrying(stop=stop_after_attempt(self._retries)):
+            for attempt in Retrying(stop=stop_after_attempt(self._retries)):
                 with attempt:
-                    async with aiohttp.ClientSession() as session:
-                        url: str = self._url
-                        async with session.post(url,
-                                                headers=headers,
-                                                data=payload,
-                                                timeout=self._timeout) as response:
-                            # Check if the request was not successful.
-                            if response.status != 201:
-                                error: dict[str, any] = await response.json()
-                                self._logger.error(
-                                    'Failed to send the system log event. Code: %s Reason: %s',
-                                    response.status, json.dumps(error['detail'], indent=4))
+                    response = requests.post(self._url, headers=headers, data=payload, timeout=self._timeout)
+                    # Check if the request was not successful.
+                    if response.status_code != 201:
+                        error = response.json()
+                        self._logger.error(
+                            'Failed to send the system log event. Code: %s Reason: %s',
+                            response.status_code, json.dumps(error.get('detail', ''), indent=4))
+                        # You might want to raise an exception here to trigger a retry
+                        raise Exception("Failed to send event")
         except RetryError as error:
             self._logger.exception(error)
 
