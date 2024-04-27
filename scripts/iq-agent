@@ -315,7 +315,7 @@ async def run_event_system_monitor(configuration: 'Configuration',
 
     logging.info('Event System monitor is created.')
 	
-    await monitor.subscribe()
+    await monitor.subscribe_system()
 
 def main(args: Namespace):
     '''
@@ -404,3 +404,8 @@ if __name__ == '__main__':
 
         # Set the running flag to false.
         RUNNING = False
+
+        # Stop the event monitor. --- I'm not sure if this will work
+        if platform.system() == 'Windows':
+            EventLogMonitor.stop()
+

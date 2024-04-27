@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 from platform import uname_result
 if platform.system() == 'Windows':
     import win32evtlog
+    import win32evtlogutil
     
 from tenacity import Retrying
 from tenacity import RetryError
@@ -63,29 +64,52 @@ class EventLogMonitor:
 
         # Set the security provider.
         self._security: SecurityProvider = security
-    
-    def event_callback(self, action, context, event):
+
+        self._running = True
+
+    def get_event_by_record_id(self, event_record_id, level, logtype):
+        # Open the event log
+        handle = win32evtlog.OpenEventLog(None, logtype)
+
+        # Set the offset to read events starting from the desired event number
+        flags = win32evtlog.EVENTLOG_SEEK_READ | win32evtlog.EVENTLOG_BACKWARDS_READ
+        evtLogs = win32evtlog.ReadEventLog(handle, flags, event_record_id, 1)
+
+        if evtLogs:
+            message = win32evtlogutil.SafeFormatMessage(evtLogs[0], logtype)
+            log_event = self.to_log_event(evtLogs[0], message, level)
+            self.send_event(log_event)
+        else:
+            self._logger.error("Failed to find event with record number %d", event_record_id)
+        
+        win32evtlog.CloseEventLog(handle)
+
+  
+    def event_callback(self, action, context, event, logtype):
         """
         Callback function that gets called when an event is received.
         """
         if action == win32evtlog.EvtSubscribeActionDeliver:
-            # Render the event to get its details
+            #logtype = "System"
+            print (f"Event received from {logtype} log")
+            
+            # Render the event to get its event record number
             rendered_event = win32evtlog.EvtRender(event, win32evtlog.EvtRenderEventXml)
-            logging.info(rendered_event)  # Print the event details
-
+            
             # Parse the event XML
             root = ET.fromstring(rendered_event)
-            # Convert to dictionary
-            dict_data = self.xml_to_dict(root)
 
-            # Convert the event to a log event
-            log_event = self.to_log_event(dict_data) 
+            # Extract the namespace URI from the root element to get record number and level element
+            namespace_uri = root.tag.split('}')[0][1:]
+            element_name = 'EventRecordID'
+            element_level = 'Level'
+            event_record_id = root.find(f".//{{{namespace_uri}}}{element_name}")
+            event_level = root.find(f".//{{{namespace_uri}}}{element_level}")
 
-            logging.info(dict_data)       
-            self.send_event(log_event)
+            if event_record_id is not None:
+                self.get_event_by_record_id(int(event_record_id.text), event_level.text, logtype)
 
-
-    async def subscribe(self) -> None:
+    async def subscribe_system(self) -> None:
         '''
         Run the event log monitor.
         '''
@@ -96,7 +120,7 @@ class EventLogMonitor:
             'System',  # The name of the log to subscribe to
             win32evtlog.EvtSubscribeToFutureEvents,  # Subscribe to future events
             None,
-            self.event_callback,
+            lambda action, context, event: self.event_callback(action, context, event, 'System'),
             None,
             query
         )
@@ -104,9 +128,15 @@ class EventLogMonitor:
         logging.info("Subscribed to event log")
 
         # Run the subscribe forever.
-        while True:
+        while self._running:
             # Wait for the interval.
             await asyncio.sleep(1)
+
+    async def stop(self) -> None:
+        '''
+        Stop the event log monitor.
+        '''
+        self._running = False
 
     def send_event(self, entry: 'LogEvent') -> None:
         # Serialize the entry.
@@ -126,6 +156,7 @@ class EventLogMonitor:
                 with attempt:
                     response = requests.post(self._url, headers=headers, data=payload, timeout=self._timeout)
                     # Check if the request was not successful.
+                    print(response.status_code)
                     if response.status_code != 201:
                         error = response.json()
                         self._logger.error(
@@ -136,41 +167,37 @@ class EventLogMonitor:
         except RetryError as error:
             self._logger.exception(error)
 
-    def xml_to_dict(self, elem, dict_data = None) -> dict:
-        if dict_data is None:
-            dict_data = {}
-        for child in elem:
-            if len(child) == 0:  # If the child has no children of its own
-                dict_data[child.tag] = child.text
-            else:  # If the child has its own children, recurse
-                dict_data[child.tag] = self.xml_to_dict(child, {})
-        return dict_data
-
-    def to_log_event(self, entry: any) -> 'LogEvent':
+    def to_log_event(self, entry: any, message: str, level: str) -> 'LogEvent':
         '''
         Convert a event entry to a log event.
         '''
-
         # Create a list of log properties.
         properties: 'list[LogProperty]' = []
-        for name, value in entry.items():
-            # Convert the key to lowercase.
-            name = name.lower()
+        properties.append(LogProperty(name="message", value=message))
+        properties.append(LogProperty(name="priority", value=level))
+        # Loop through the record to access its members
+        for member in dir(entry):
+            if not member.startswith('__') and member in ['ClosingRecordNumber','Data','EventCategory','EventID','EventType', 'RecordNumber', 'Reserved', 'ReservedFlags','Sid','SourceName','TimeGenerated','TimeWritten']:
+                value = getattr(entry, member)
+                print(f"{member}: {value}")
+        
+                # Convert the key to lowercase.
+                name = member.lower()
 
-            # Convert the value to a string.
-            if isinstance(value, datetime):
-                value = value.isoformat()
-            else:
-                value = str(value)
+                # Convert the value to a string.
+                if isinstance(value, datetime):
+                    value = value.isoformat()
+                else:
+                    value = str(value)
 
-            if self._logger.isEnabledFor(logging.DEBUG):
-                self._logger.debug('Adding property: %s=%s', name, value)
+                if self._logger.isEnabledFor(logging.DEBUG):
+                   self._logger.debug('Adding property: %s=%s', name, value)
 
-            # Add the property to the list.
-            properties.append(LogProperty(name=name, value=value))
+                # Add the property to the list.
+                properties.append(LogProperty(name=name, value=value))
 
         # Return the log event.
         return LogEvent(
-            source='event_log',
+            source='journald',
             properties=properties
         )
